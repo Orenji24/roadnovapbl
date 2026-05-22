@@ -1,0 +1,35 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}RoadNova{% endblock %}</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="{% static 'trips/styles.css' %}">
+  <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script defer src="https://unpkg.com/lucide@latest"></script>
+  <script defer src="{% static 'trips/app.js' %}"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{% url 'home' %}" aria-label="RoadNova home">
+      <span class="brand-mark">RN</span>
+      <span>RoadNova</span>
+    </a>
+    <nav class="nav">
+      <button data-view="home" type="button">Home</button>
+      <button data-view="planner" type="button">Planner</button>
+      <button data-view="map" type="button">Map</button>
+      <button data-view="costs" type="button">Costs</button>
+      <button data-view="weather" type="button">Weather</button>
+      <button data-view="sos" type="button">SOS</button>
+      <button data-view="split" type="button">Split</button>
+      <a href="/admin/">Admin</a>
+    </nav>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

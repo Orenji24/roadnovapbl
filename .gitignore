@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.py[cod]
+db.sqlite3
+.env
+.DS_Store
+*.log
+*.png
+*.zip
+*.code-workspace
+backend/roadnova_backend/roadnova.py
+backend/staticfiles/

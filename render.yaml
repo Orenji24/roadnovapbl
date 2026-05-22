@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: roadnova
+    env: python
+    buildCommand: pip install -r requirements.txt && python backend/manage.py collectstatic --noinput && python backend/manage.py migrate
+    startCommand: gunicorn roadnova_backend.wsgi:application --chdir backend
+    envVars:
+      - key: DEBUG
+        value: "False"
+      - key: ALLOWED_HOSTS
+        value: ".onrender.com,127.0.0.1,localhost"
+      - key: CSRF_TRUSTED_ORIGINS
+        value: "https://*.onrender.com"
+      - key: SECRET_KEY
+        generateValue: true

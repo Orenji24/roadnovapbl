@@ -1,0 +1,157 @@
+{% extends 'trips/base.html' %}
+{% block title %}RoadNova India - Road Trip Planner{% endblock %}
+{% block content %}
+{{ city_json|json_script:"city-data" }}
+<section class="home-screen view-panel is-active" data-panel="home">
+  <div class="home-copy">
+    <p class="eyebrow">India roadtrip studio</p>
+    <h1>RoadNova</h1>
+    <p>Plan Indian road trips with city-to-city itineraries, open maps, live weather, cost estimates, SOS tools, and group expense splits.</p>
+  </div>
+  <div class="feature-launcher" aria-label="RoadNova features">
+    <button class="feature-tile" data-view="planner" type="button"><i data-lucide="route"></i><span>Trip plan generator</span></button>
+    <button class="feature-tile" data-view="map" type="button"><i data-lucide="map"></i><span>Map</span></button>
+    <button class="feature-tile" data-view="costs" type="button"><i data-lucide="indian-rupee"></i><span>Costs</span></button>
+    <button class="feature-tile" data-view="weather" type="button"><i data-lucide="cloud-sun"></i><span>Weather</span></button>
+    <button class="feature-tile" data-view="sos" type="button"><i data-lucide="siren"></i><span>SOS</span></button>
+    <button class="feature-tile" data-view="split" type="button"><i data-lucide="users-round"></i><span>Group expense split</span></button>
+  </div>
+</section>
+
+<section class="feature-screen view-panel" data-panel="planner">
+  <div class="screen-heading">
+    <button class="back-button" data-view="home" type="button"><i data-lucide="arrow-left"></i>Home</button>
+    <p class="eyebrow">Planner</p>
+    <h2>Generate a detailed India itinerary</h2>
+  </div>
+  <div class="screen-grid planner-grid">
+    <form class="trip-form glass-card" id="trip-form">
+      {% csrf_token %}
+      <label>Start city
+        <select name="origin" required>
+          {% for city in cities %}<option value="{{ city.slug }}">{{ city.name }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>End city
+        <select name="destination" required>
+          {% for city in cities %}<option value="{{ city.slug }}" {% if city.slug == "goa" %}selected{% endif %}>{{ city.name }}</option>{% endfor %}
+        </select>
+      </label>
+      <div class="field-row">
+        <label>Start date <input type="date" name="start_date" value="2026-06-01" required></label>
+        <label>End date <input type="date" name="end_date" value="2026-06-05" required></label>
+      </div>
+      <div class="field-row">
+        <label>Travellers <input type="number" name="travelers" value="4" min="1" max="12"></label>
+        <label>Car mileage <input type="number" name="mileage" value="14" min="6" max="28" step="0.5"></label>
+      </div>
+      <fieldset>
+        <legend>Trip interests</legend>
+        <div class="chip-grid">
+          {% for value, label in interests.items %}
+          <label class="chip"><input type="checkbox" name="interests" value="{{ value }}" {% if value != "adventure" %}checked{% endif %}>{{ label }}</label>
+          {% endfor %}
+        </div>
+      </fieldset>
+      <button class="button primary" type="submit"><i data-lucide="sparkles"></i>Build itinerary</button>
+    </form>
+    <article class="glass-card itinerary-card">
+      <div class="card-title"><i data-lucide="calendar-days"></i><h2>Detailed itinerary</h2></div>
+      <div id="itinerary-list" class="itinerary-list empty-state">Choose cities and generate a plan.</div>
+    </article>
+  </div>
+</section>
+
+<section class="feature-screen view-panel" data-panel="map">
+  <div class="screen-heading">
+    <button class="back-button" data-view="home" type="button"><i data-lucide="arrow-left"></i>Home</button>
+    <p class="eyebrow">Open map</p>
+    <h2 id="route-summary">Bangalore to Goa</h2>
+  </div>
+  <div class="screen-grid map-grid">
+    <div class="map-panel" id="map-section">
+      <div id="map" aria-label="OpenStreetMap route map"></div>
+      <div class="map-overlay"><span><i data-lucide="map"></i> OpenStreetMap</span><span>Live route view</span></div>
+    </div>
+    <article class="glass-card poi-card">
+      <div class="card-title"><i data-lucide="landmark"></i><h2>Live OSM options</h2></div>
+      <div class="poi-controls">
+        <select id="poi-city">
+          {% for city in cities %}<option value="{{ city.slug }}">{{ city.name }}</option>{% endfor %}
+        </select>
+        <select id="poi-category">
+          <option value="hotels">Hotels</option>
+          <option value="restaurants">Restaurants</option>
+          <option value="temples">Temples</option>
+          <option value="beaches">Beaches</option>
+        </select>
+        <button class="button ghost" id="load-pois" type="button"><i data-lucide="search"></i>Find</button>
+      </div>
+      <div id="poi-results" class="poi-results">OpenStreetMap results will appear here.</div>
+    </article>
+  </div>
+</section>
+
+<section class="feature-screen view-panel" data-panel="costs">
+  <div class="screen-heading">
+    <button class="back-button" data-view="home" type="button"><i data-lucide="arrow-left"></i>Home</button>
+    <p class="eyebrow">Budget</p>
+    <h2>Fuel, tolls, stays, food, and total split</h2>
+  </div>
+  <article class="glass-card costs-card">
+    <div class="card-title"><i data-lucide="indian-rupee"></i><h2>Trip costs</h2></div>
+    <div class="metric-grid" id="costs"><div class="empty-state">Generate a trip plan to calculate costs.</div></div>
+  </article>
+</section>
+
+<section class="feature-screen view-panel" data-panel="weather">
+  <div class="screen-heading">
+    <button class="back-button" data-view="home" type="button"><i data-lucide="arrow-left"></i>Home</button>
+    <p class="eyebrow">Live forecast</p>
+    <h2>Weather for your route cities</h2>
+  </div>
+  <article class="glass-card weather-card">
+    <div class="card-title"><i data-lucide="cloud-sun"></i><h2>Weather</h2></div>
+    <div id="weather-list" class="weather-list">Generate a trip plan to load live forecast.</div>
+  </article>
+</section>
+
+<section class="feature-screen view-panel" data-panel="sos">
+  <div class="screen-heading">
+    <button class="back-button" data-view="home" type="button"><i data-lucide="arrow-left"></i>Home</button>
+    <p class="eyebrow">Emergency</p>
+    <h2>SOS calling and India emergency numbers</h2>
+  </div>
+  <article class="glass-card sos-card">
+    <div class="card-title"><i data-lucide="siren"></i><h2>SOS</h2></div>
+    <label>Emergency contact <input id="emergency-contact" type="tel" placeholder="+91 98765 43210"></label>
+    <div class="sos-actions">
+      <a class="button danger" id="sos-call" href="tel:112"><i data-lucide="phone-call"></i>Call SOS</a>
+      <a class="button ghost" href="sms:?body=I need help. My current RoadNova route is active."><i data-lucide="message-circle"></i>Send SMS</a>
+    </div>
+    <div class="emergency-list">
+      {% for label, number in emergency_numbers.items %}
+      <a href="tel:{{ number }}"><strong>{{ number }}</strong><span>{{ label }}</span></a>
+      {% endfor %}
+    </div>
+  </article>
+</section>
+
+<section class="feature-screen view-panel" data-panel="split">
+  <div class="screen-heading">
+    <button class="back-button" data-view="home" type="button"><i data-lucide="arrow-left"></i>Home</button>
+    <p class="eyebrow">Shared expenses</p>
+    <h2>Group expense split</h2>
+  </div>
+  <article class="glass-card split-card">
+    <div class="card-title"><i data-lucide="users-round"></i><h2>Group split</h2></div>
+    <div id="split-output" class="empty-state">Generate a trip plan to see per-person split.</div>
+    <div class="expense-tools">
+      <input id="expense-name" placeholder="Expense label">
+      <input id="expense-amount" type="number" placeholder="Amount">
+      <button class="button ghost" id="add-expense" type="button"><i data-lucide="plus"></i>Add</button>
+    </div>
+    <ul id="expense-list"></ul>
+  </article>
+</section>
+{% endblock %}

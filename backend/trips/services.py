@@ -1,0 +1,308 @@
+import json
+from datetime import datetime, timedelta
+from math import ceil
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+
+from .india_data import CITIES, INTERESTS, corridor_waypoints, places_for_city, road_distance_km
+
+
+OPEN_METEO_URL = 'https://api.open-meteo.com/v1/forecast'
+OVERPASS_URL = 'https://overpass-api.de/api/interpreter'
+MAX_DAILY_DISTANCE_KM = 300
+MAX_TRIP_DAYS = 21
+
+
+def _get_json(url, timeout=8):
+    request = Request(url, headers={'User-Agent': 'RoadNova-Django/1.0'})
+    with urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode('utf-8'))
+
+
+def parse_trip_dates(start_date, end_date):
+    start = datetime.strptime(start_date, '%Y-%m-%d').date()
+    end = datetime.strptime(end_date, '%Y-%m-%d').date()
+    if end < start:
+        start, end = end, start
+    days = min((end - start).days + 1, MAX_TRIP_DAYS)
+    return start, days
+
+
+def generated_waypoint(origin, destination, slot, days):
+    progress = slot / days
+    return {
+        'slug': f'route-halt-{slot}',
+        'name': f"Route Halt {slot}",
+        'state': 'Road corridor',
+        'lat': origin['lat'] + (destination['lat'] - origin['lat']) * progress,
+        'lon': origin['lon'] + (destination['lon'] - origin['lon']) * progress,
+        'hotel_avg': 2600,
+        'food_avg': 800,
+        'fuel_price': origin['fuel_price'],
+        'scenic': 'Choose a marked service plaza, safe town bypass, lake viewpoint, or highway rest zone near this route segment.',
+        'food': 'Highway dhaba or food court',
+        'hotel': 'Route-side business hotel',
+        'kind': 'highway',
+    }
+
+
+def build_legs(stop_points):
+    legs = []
+    total_distance = 0
+    for index in range(len(stop_points) - 1):
+        start_city = stop_points[index]
+        end_city = stop_points[index + 1]
+        distance = road_distance_km(start_city, end_city)
+        if distance > MAX_DAILY_DISTANCE_KM:
+            return None, distance, start_city, end_city
+        total_distance += distance
+        legs.append(
+            {
+                'from': start_city['name'],
+                'to': end_city['name'],
+                'from_slug': start_city['slug'],
+                'to_slug': end_city['slug'],
+                'distance_km': distance,
+                'drive_hours': round(distance / 62, 1),
+                'toll_estimate': round(distance * 1.65),
+            }
+        )
+    return (legs, total_distance), None, None, None
+
+
+def point_places(point):
+    if point.get('kind') == 'highway':
+        return [
+            {'name': point['name'], 'type': 'Route halt', 'note': point['scenic']},
+            {'name': point['food'], 'type': 'Food', 'note': 'Use this as the main driver-rest meal stop.'},
+            {'name': point['hotel'], 'type': 'Stay', 'note': 'Overnight halt to keep the road day sane.'},
+        ]
+    return places_for_city(point['slug'], [])
+
+
+def point_hotels(point):
+    return [point['hotel']] if point.get('kind') == 'highway' else point['hotels']
+
+
+def point_restaurants(point):
+    return [point['food']] if point.get('kind') == 'highway' else point['restaurants']
+
+
+def point_road_notes(point):
+    if point.get('kind') == 'highway':
+        return {
+            'fuel': f"Use the main fuel plaza before entering {point['name']} town traffic.",
+            'scenic': point['scenic'],
+            'break': f"Keep the halt practical: fuel, washrooms, food, and overnight at {point['hotel']}.",
+        }
+    return point['road_notes']
+
+
+def build_plan(origin_slug, destination_slug, start_date, end_date, interests, travelers=4, mileage=14):
+    if origin_slug == destination_slug:
+        raise ValueError('Choose two different cities.')
+    if origin_slug not in CITIES or destination_slug not in CITIES:
+        raise ValueError('Choose cities from the RoadNova India list.')
+
+    travelers = max(1, min(int(travelers or 1), 12))
+    mileage = max(6, min(float(mileage or 14), 28))
+    start, days = parse_trip_dates(start_date, end_date)
+    direct_distance = road_distance_km(CITIES[origin_slug], CITIES[destination_slug])
+    minimum_days = ceil(direct_distance / MAX_DAILY_DISTANCE_KM)
+    if minimum_days > days:
+        raise ValueError(
+            f"{CITIES[origin_slug]['name']} to {CITIES[destination_slug]['name']} is about {direct_distance} km by road. "
+            f"At RoadNova's safe limit of {MAX_DAILY_DISTANCE_KM} km per day, choose at least {minimum_days} trip days."
+        )
+
+    origin_point = {**CITIES[origin_slug], 'slug': origin_slug, 'kind': 'city'}
+    destination_point = {**CITIES[destination_slug], 'slug': destination_slug, 'kind': 'city'}
+    stop_points = [
+        origin_point,
+        *[{**stop, 'kind': 'highway'} for stop in corridor_waypoints(origin_slug, destination_slug, days)],
+        destination_point,
+    ]
+    built, unsafe_distance, unsafe_start, unsafe_end = build_legs(stop_points)
+
+    if built is None:
+        stop_points = [
+            origin_point,
+            *[generated_waypoint(origin_point, destination_point, slot, days) for slot in range(1, days)],
+            destination_point,
+        ]
+        built, unsafe_distance, unsafe_start, unsafe_end = build_legs(stop_points)
+
+    if built is None:
+        raise ValueError(
+            f"The {unsafe_start['name']} to {unsafe_end['name']} leg is {unsafe_distance} km, above the "
+            f"{MAX_DAILY_DISTANCE_KM} km daily limit. Increase the trip days so RoadNova can add safer overnight stops."
+        )
+
+    legs, total_distance = built
+    route_cities = stop_points
+
+    destination = CITIES[destination_slug]
+    fuel_price = CITIES[origin_slug]['fuel_price']
+    fuel_litres = total_distance / mileage
+    fuel_cost = round(fuel_litres * fuel_price)
+    toll_cost = sum(leg['toll_estimate'] for leg in legs)
+    hotel_cost = round(sum(point['hotel_avg'] for point in stop_points[1:]) or destination['hotel_avg'])
+    food_cost = round(sum(point['food_avg'] for point in stop_points) / len(stop_points) * travelers * days)
+    total_cost = fuel_cost + toll_cost + hotel_cost + food_cost
+
+    itinerary = []
+    for day in range(days):
+        leg = legs[day]
+        if leg:
+            from_city = stop_points[day]
+            to_city = stop_points[day + 1]
+            from_notes = point_road_notes(from_city)
+            to_notes = point_road_notes(to_city)
+            to_hotels = point_hotels(to_city)
+            to_restaurants = point_restaurants(to_city)
+            fuel_km = min(max(round(leg['distance_km'] * 0.38), 70), max(80, leg['distance_km'] - 40))
+            scenic_km = min(max(round(leg['distance_km'] * 0.58), 110), max(120, leg['distance_km'] - 25))
+            meal_km = min(max(round(leg['distance_km'] * 0.72), 130), max(140, leg['distance_km'] - 15))
+            travel_title = f"Drive {leg['distance_km']} km from {from_city['name']} to {to_city['name']}"
+            drive_blocks = [
+                {
+                    'label': 'Start',
+                    'distance': '0 km',
+                    'text': f"Leave {from_city['name']} by 6:30 AM with tyres checked, FASTag balance ready, offline maps saved, and water/snacks packed.",
+                },
+                {
+                    'label': 'Fuel stop',
+                    'distance': f"{fuel_km} km",
+                    'text': f"Travel {fuel_km} km to the {from_city['name']}-{to_city['name']} highway fuel plaza, then refuel or top up. {from_notes['fuel']}",
+                },
+                {
+                    'label': 'Scenic halt',
+                    'distance': f"{scenic_km} km",
+                    'text': f"At around {scenic_km} km, pull into a safe viewpoint or service road shoulder for a 25-minute scenery break. {to_notes['scenic']}",
+                },
+                {
+                    'label': 'Food break',
+                    'distance': f"{meal_km} km",
+                    'text': f"Pause near the {meal_km} km mark at a highway food court or dhaba for a proper meal and driver rest. Try {to_restaurants[day % len(to_restaurants)]} after arrival if highway options look weak.",
+                },
+                {
+                    'label': 'Arrive',
+                    'distance': f"{leg['distance_km']} km",
+                    'text': f"Reach {to_city['name']}, park at {to_hotels[day % len(to_hotels)]}, and stop driving for the day.",
+                },
+            ]
+        city = to_city
+        date = start + timedelta(days=day)
+        places = point_places(city)
+        morning = places[0]
+        afternoon = places[min(1, len(places) - 1)]
+        evening = places[min(2, len(places) - 1)]
+        hotels = point_hotels(city)
+        restaurants = point_restaurants(city)
+        notes = point_road_notes(city)
+        itinerary.append(
+            {
+                'day': day + 1,
+                'date': date.isoformat(),
+                'city': city['name'],
+                'state': city['state'],
+                'title': travel_title,
+                'drive_blocks': drive_blocks,
+                'hotel': hotels[day % len(hotels)],
+                'restaurant': restaurants[day % len(restaurants)],
+                'morning': f"{morning['name']} - {morning['note']}",
+                'afternoon': f"{afternoon['name']} - {afternoon['note']}",
+                'evening': f"{evening['name']} - {evening['note']}",
+                'drive_note': f"{round(leg['drive_hours'], 1)} driving hours planned. {notes['break']}",
+            }
+        )
+
+    return {
+        'origin': CITIES[origin_slug]['name'],
+        'destination': CITIES[destination_slug]['name'],
+        'days': days,
+        'travelers': travelers,
+        'interests': [INTERESTS.get(item, item.title()) for item in interests],
+        'route': route_cities,
+        'legs': legs,
+        'costs': {
+            'fuel': fuel_cost,
+            'tolls': toll_cost,
+            'hotels': hotel_cost,
+            'food': food_cost,
+            'total': total_cost,
+            'per_person': round(total_cost / travelers),
+            'fuel_litres': round(fuel_litres, 1),
+        },
+        'itinerary': itinerary,
+        'emergency': {
+            'primary': '112',
+            'police': '100',
+            'fire': '101',
+            'ambulance': '108',
+            'road_help': '1033',
+        },
+    }
+
+
+def weather_for_city(city_slug, days=7):
+    city = CITIES[city_slug]
+    params = urlencode(
+        {
+            'latitude': city['lat'],
+            'longitude': city['lon'],
+            'daily': 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max',
+            'timezone': 'Asia/Kolkata',
+            'forecast_days': max(1, min(int(days or 7), 16)),
+        }
+    )
+    data = _get_json(f'{OPEN_METEO_URL}?{params}')
+    daily = data.get('daily', {})
+    forecast = []
+    for index, day in enumerate(daily.get('time', [])):
+        forecast.append(
+            {
+                'date': day,
+                'max_c': daily.get('temperature_2m_max', [None])[index],
+                'min_c': daily.get('temperature_2m_min', [None])[index],
+                'rain_pct': daily.get('precipitation_probability_max', [0])[index],
+                'code': daily.get('weather_code', [None])[index],
+            }
+        )
+    return {'city': city['name'], 'forecast': forecast}
+
+
+def osm_pois(city_slug, category):
+    city = CITIES[city_slug]
+    tags = {
+        'hotels': '["tourism"="hotel"]',
+        'restaurants': '["amenity"="restaurant"]',
+        'temples': '["amenity"="place_of_worship"]',
+        'beaches': '["natural"="beach"]',
+    }
+    tag = tags.get(category, tags['restaurants'])
+    query = f"""
+    [out:json][timeout:8];
+    (
+      node(around:18000,{city['lat']},{city['lon']}){tag};
+      way(around:18000,{city['lat']},{city['lon']}){tag};
+    );
+    out center 8;
+    """
+    params = urlencode({'data': query})
+    data = _get_json(f'{OVERPASS_URL}?{params}', timeout=10)
+    pois = []
+    for item in data.get('elements', [])[:8]:
+        tags_data = item.get('tags', {})
+        name = tags_data.get('name')
+        if not name:
+            continue
+        pois.append(
+            {
+                'name': name,
+                'lat': item.get('lat') or item.get('center', {}).get('lat'),
+                'lon': item.get('lon') or item.get('center', {}).get('lon'),
+                'kind': category,
+            }
+        )
+    return {'city': city['name'], 'category': category, 'pois': pois}
